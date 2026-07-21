@@ -76,6 +76,37 @@ def api_trades():
             return jsonify([dict(r) for r in cur.fetchall()])
 
 
+@app.get("/api/largest")
+def api_largest():
+    """Biggest transactions in a window, ranked by the statutory range floor\n    (amount_low) - the only defensible size figure, since filings disclose\n    ranges, not exact amounts."""
+    days = int(request.args.get("days", "0") or 0)
+    ttype = request.args.get("type") or None  # 'buy' | 'sell' | None
+    chamber = request.args.get("chamber") or None
+    limit = min(int(request.args.get("limit", "50")), 200)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select t.*, f.filer_name, f.source as chamber, f.filed_date, f.filer_state\n                   from congress_trades t\n                   join congress_filings f on f.id = t.filing_id\n                   where t.amount_low is not null\n                     and (%(days)s = 0 or coalesce(t.transaction_date, f.filed_date)\n                          >= current_date - %(days)s)\n                     and (%(chamber)s::text is null or f.source = %(chamber)s)\n                     and (%(ttype)s::text is null\n                          or (%(ttype)s = 'buy' and t.transaction_type ilike 'p%%')\n                          or (%(ttype)s = 'sell' and t.transaction_type ilike 's%%'))\n                   order by t.amount_low desc, t.amount_high desc nulls last,\n                            coalesce(t.transaction_date, f.filed_date) desc\n                   limit %(limit)s""",
+                {"days": days, "chamber": chamber, "ttype": ttype, "limit": limit},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
+@app.get("/api/clusters")
+def api_clusters():
+    """Tickers where buys consolidate across members: distinct buyers, buy\n    count, aggregate range floor/ceiling, buyer names, sell count for context.\n    Buy = transaction_type starting 'P' (House) / 'Purchase' (Senate)."""
+    days = int(request.args.get("days", "0") or 0)
+    min_buyers = int(request.args.get("min_buyers", "2"))
+    limit = min(int(request.args.get("limit", "50")), 200)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """with w as (\n                     select t.ticker, t.transaction_type, t.amount_low, t.amount_high,\n                            f.filer_name\n                     from congress_trades t\n                     join congress_filings f on f.id = t.filing_id\n                     where t.ticker is not null\n                       and (%(days)s = 0 or coalesce(t.transaction_date, f.filed_date)\n                            >= current_date - %(days)s)\n                   )\n                   select ticker,\n                     count(*) filter (where transaction_type ilike 'p%%') as buys,\n                     count(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyers,\n                     count(*) filter (where transaction_type ilike 's%%') as sells,\n                     sum(amount_low) filter (where transaction_type ilike 'p%%') as buy_floor,\n                     sum(amount_high) filter (where transaction_type ilike 'p%%') as buy_ceiling,\n                     array_agg(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyer_names\n                   from w\n                   group by ticker\n                   having count(distinct filer_name) filter (where transaction_type ilike 'p%%') >= %(min_buyers)s\n                   order by buyers desc, buy_floor desc nulls last\n                   limit %(limit)s""",
+                {"days": days, "min_buyers": min_buyers, "limit": limit},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
 @app.get("/api/filings")
 def api_filings():
     limit = min(int(request.args.get("limit", "100")), 500)

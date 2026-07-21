@@ -11,10 +11,10 @@ body{background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,system-
 header{padding:14px 16px 8px;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line)}
 h1{font-size:17px;font-weight:600}
 .sub{color:var(--dim);font-size:12px;margin-top:2px}
-nav{display:flex;gap:6px;margin-top:10px;overflow-x:auto}
-nav button{background:var(--card);color:var(--dim);border:1px solid var(--line);border-radius:16px;padding:6px 14px;font-size:13px}
+nav{display:flex;gap:6px;margin-top:10px;overflow-x:auto;-webkit-overflow-scrolling:touch}
+nav button{background:var(--card);color:var(--dim);border:1px solid var(--line);border-radius:16px;padding:6px 14px;font-size:13px;white-space:nowrap}
 nav button.on{color:var(--text);border-color:var(--blue)}
-#filters{display:flex;gap:6px;padding:10px 16px}
+#filters{display:flex;gap:6px;padding:10px 16px;flex-wrap:wrap}
 #filters input,#filters select{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;min-width:0;flex:1}
 main{padding:0 12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0}
@@ -23,7 +23,10 @@ main{padding:0 12px}
 .buy{color:var(--green)}.sell{color:var(--red)}
 a{color:var(--blue);text-decoration:none;font-size:12px}
 .badge{font-size:11px;border:1px solid var(--line);border-radius:6px;padding:1px 6px;color:var(--dim)}
+.tk{font-size:16px}
+.names{color:var(--dim);font-size:12px;margin-top:4px;line-height:1.5}
 .empty{color:var(--dim);text-align:center;padding:30px 0;font-size:13px}
+.note{color:var(--dim);font-size:11px;padding:4px 16px 0}
 </style>
 </head>
 <body>
@@ -32,37 +35,81 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
   <div class="sub">House Clerk + Senate eFD &middot; STOCK Act PTR filings</div>
   <nav>
     <button data-tab="trades" class="on">Trades</button>
+    <button data-tab="largest">Largest</button>
+    <button data-tab="clusters">Clusters</button>
     <button data-tab="filings">Filings</button>
     <button data-tab="runs">Runs</button>
     <button data-tab="config">Config</button>
   </nav>
 </header>
-<div id="filters">
-  <input id="f-ticker" placeholder="Ticker" autocapitalize="characters">
-  <input id="f-member" placeholder="Member">
-  <select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>
-</div>
+<div id="filters"></div>
+<div id="note" class="note"></div>
 <main id="main"></main>
 <script>
-let tab='trades';
+let tab='trades', cfg={};
 const $=s=>document.querySelector(s);
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const fmtAmt=t=>t.amount_range||'';
-const txCls=t=>/^p/i.test(t.transaction_type||'')?'buy':(/^s/i.test(t.transaction_type||'')?'sell':'');
-const txLbl=t=>({'P':'BUY','S':'SELL','E':'EXCH'})[(t.transaction_type||'').charAt(0).toUpperCase()]||esc(t.transaction_type||'?');
+const txCls=t=>/^p/i.test(t||'')?'buy':(/^s/i.test(t||'')?'sell':'');
+const txLbl=t=>({'P':'BUY','S':'SELL','E':'EXCH'})[(t||'').charAt(0).toUpperCase()]||esc(t||'?');
+const usd=n=>n==null?'?':'$'+Number(n).toLocaleString();
 async function j(u){const r=await fetch(u);return r.json()}
-function qs(){const p=new URLSearchParams();const t=$('#f-ticker').value.trim(),m=$('#f-member').value.trim(),c=$('#f-chamber').value;if(t)p.set('ticker',t);if(m)p.set('member',m);if(c)p.set('chamber',c);return p.toString()}
+
+const WINDOWS=[[30,'30d'],[60,'60d'],[90,'90d'],[180,'180d'],[365,'1y'],[0,'All']];
+function windowSelect(id,def){return `<select id="${id}">`+WINDOWS.map(([v,l])=>`<option value="${v}" ${v==def?'selected':''}>${l}</option>`).join('')+`</select>`}
+
+function filtersFor(t){
+  const defWin=parseInt(cfg.dashboard_default_window_days||'90');
+  if(t==='trades')return `<input id="f-ticker" placeholder="Ticker" autocapitalize="characters"><input id="f-member" placeholder="Member"><select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
+  if(t==='largest')return windowSelect('f-days',defWin)+`<select id="f-type"><option value="">All types</option><option value="buy">Buys</option><option value="sell">Sells</option></select><select id="f-chamber2"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
+  if(t==='clusters')return windowSelect('f-days2',defWin)+`<input id="f-minbuyers" type="number" min="1" value="${parseInt(cfg.cluster_min_buyers||'2')}" style="max-width:90px" title="min buyers">`;
+  return '';
+}
+function noteFor(t){
+  if(t==='largest')return 'Ranked by statutory range floor - filings disclose ranges, not exact amounts.';
+  if(t==='clusters')return 'Tickers bought by multiple members in the window. $ figures = sum of disclosed range floors-ceilings.';
+  return '';
+}
+
 async function render(){
   const el=$('#main');el.innerHTML='<div class="empty">Loading…</div>';
-  $('#filters').style.display=tab==='trades'?'flex':'none';
+  $('#filters').innerHTML=filtersFor(tab);
+  $('#note').textContent=noteFor(tab);
+  document.querySelectorAll('#filters input,#filters select').forEach(x=>x.addEventListener('change',draw));
+  await draw();
+}
+async function draw(){
+  const el=$('#main');
   if(tab==='trades'){
-    const d=await j('/api/trades?'+qs());
+    const p=new URLSearchParams();
+    if($('#f-ticker')?.value.trim())p.set('ticker',$('#f-ticker').value.trim());
+    if($('#f-member')?.value.trim())p.set('member',$('#f-member').value.trim());
+    if($('#f-chamber')?.value)p.set('chamber',$('#f-chamber').value);
+    const d=await j('/api/trades?'+p);
     el.innerHTML=d.length?d.map(t=>`<div class="card">
-      <div class="row1"><span>${esc(t.filer_name)}</span><span class="${txCls(t)}">${txLbl(t)} ${esc(fmtAmt(t))}</span></div>
+      <div class="row1"><span>${esc(t.filer_name)}</span><span class="${txCls(t.transaction_type)}">${txLbl(t.transaction_type)} ${esc(t.amount_range||'')}</span></div>
       <div class="row2"><span>${esc(t.ticker||'')} ${esc(t.asset_name||'')}</span></div>
-      <div class="row2"><span>tx ${esc(t.transaction_date||'?')} &middot; filed ${esc(t.filed_date||'?')} &middot; ${esc(t.chamber)}</span>
+      <div class="row2"><span>tx ${esc(t.transaction_date||'?')} &middot; ${esc(t.chamber)}</span>
       <span><a href="${esc(t.source_url)}" target="_blank">source</a> <span class="badge">parser ${esc(t.parser_version)}</span></span></div>
-    </div>`).join(''):'<div class="empty">No trades yet - first scrape may still be running. Check Runs.</div>';
+    </div>`).join(''):'<div class="empty">No trades match.</div>';
+  }else if(tab==='largest'){
+    const p=new URLSearchParams({days:$('#f-days')?.value||'90',limit:'50'});
+    if($('#f-type')?.value)p.set('type',$('#f-type').value);
+    if($('#f-chamber2')?.value)p.set('chamber',$('#f-chamber2').value);
+    const d=await j('/api/largest?'+p);
+    el.innerHTML=d.length?d.map(t=>`<div class="card">
+      <div class="row1"><span>${esc(t.filer_name)}</span><span class="${txCls(t.transaction_type)}">${txLbl(t.transaction_type)} ${esc(t.amount_range||'')}</span></div>
+      <div class="row2"><span>${esc(t.ticker||'')} ${esc(t.asset_name||'')}</span></div>
+      <div class="row2"><span>tx ${esc(t.transaction_date||'?')} &middot; ${esc(t.chamber)}</span>
+      <span><a href="${esc(t.source_url)}" target="_blank">source</a></span></div>
+    </div>`).join(''):'<div class="empty">No transactions in this window.</div>';
+  }else if(tab==='clusters'){
+    const p=new URLSearchParams({days:$('#f-days2')?.value||'90',min_buyers:$('#f-minbuyers')?.value||'2',limit:'50'});
+    const d=await j('/api/clusters?'+p);
+    el.innerHTML=d.length?d.map(c=>`<div class="card">
+      <div class="row1"><span class="tk">${esc(c.ticker)}</span><span class="buy">${c.buyers} buyers &middot; ${c.buys} buys</span></div>
+      <div class="row2"><span>est. ${usd(c.buy_floor)} - ${usd(c.buy_ceiling)}</span><span>${c.sells} sells in window</span></div>
+      <div class="names">${(c.buyer_names||[]).map(esc).join(', ')}</div>
+    </div>`).join(''):'<div class="empty">No tickers meet the threshold in this window.</div>';
   }else if(tab==='filings'){
     const d=await j('/api/filings');
     el.innerHTML=d.length?d.map(f=>`<div class="card">
@@ -85,11 +132,10 @@ async function render(){
   }
 }
 function token(){let t=localStorage.getItem('admin_token');if(!t){t=prompt('Admin token');if(t)localStorage.setItem('admin_token',t)}return t}
-async function setCfg(k,v){await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token()},body:JSON.stringify({key:k,value:v})})}
+async function setCfg(k,v){await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token()},body:JSON.stringify({key:k,value:v})});cfg[k]=v}
 async function runScrape(){const r=await fetch('/api/scrape',{method:'POST',headers:{'X-Admin-Token':token()}});alert((await r.json()).started?'Scrape started':'Failed')}
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');tab=b.dataset.tab;render()});
-['f-ticker','f-member','f-chamber'].forEach(id=>{$('#'+id).addEventListener('change',render)});
-render();
+(async()=>{try{(await j('/api/config')).forEach(c=>cfg[c.key]=c.value)}catch(e){}render()})();
 </script>
 </body>
 </html>
