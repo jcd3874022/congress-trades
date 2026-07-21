@@ -21,7 +21,7 @@ from db import get_conn
 from scraper.common import finish_run, insert_trades, start_run
 
 CLERK = "https://disclosures-clerk.house.gov/public_disc"
-ZIP_URL = CLERK + "/financial-pubdisc/{year}FD.zip"
+ZIP_URL = CLERK + "/financial-pdfs/{year}FD.zip"
 PDF_URL = CLERK + "/ptr-pdfs/{year}/{doc_id}.pdf"
 UA = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
