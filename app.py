@@ -6,7 +6,7 @@ import time
 from flask import Flask, jsonify, render_template, request
 
 from db import get_conn
-from scraper import house, senate
+from scraper import edgar, house, senate
 from scraper.common import load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -16,14 +16,19 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 _scrape_lock = threading.Lock()
 
 
-def scrape_all():
+SOURCES = {"senate": senate, "house": house, "edgar": edgar}
+
+
+def scrape_all(sources=None):
     if not _scrape_lock.acquire(blocking=False):
         return {"skipped": "scrape already running"}
     try:
         cfg = load_config()
         out = {}
-        out["senate"] = senate.run(cfg)
-        out["house"] = house.run(cfg)
+        for name in (sources or list(SOURCES)):
+            mod = SOURCES.get(name)
+            if mod:
+                out[name] = mod.run(cfg)
         return out
     finally:
         _scrape_lock.release()
@@ -101,8 +106,26 @@ def api_clusters():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """with w as (\n                     select t.ticker, t.transaction_type, t.amount_low, t.amount_high,\n                            f.filer_name\n                     from congress_trades t\n                     join congress_filings f on f.id = t.filing_id\n                     where t.ticker is not null\n                       and (%(days)s = 0 or coalesce(t.transaction_date, f.filed_date)\n                            >= current_date - %(days)s)\n                   )\n                   select ticker,\n                     count(*) filter (where transaction_type ilike 'p%%') as buys,\n                     count(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyers,\n                     count(*) filter (where transaction_type ilike 's%%') as sells,\n                     sum(amount_low) filter (where transaction_type ilike 'p%%') as buy_floor,\n                     sum(amount_high) filter (where transaction_type ilike 'p%%') as buy_ceiling,\n                     array_agg(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyer_names\n                   from w\n                   group by ticker\n                   having count(distinct filer_name) filter (where transaction_type ilike 'p%%') >= %(min_buyers)s\n                   order by buyers desc, buy_floor desc nulls last\n                   limit %(limit)s""",
+                """with w as (\n                     select t.ticker, t.transaction_type, t.amount_low, t.amount_high,\n                            f.filer_name\n                     from congress_trades t\n                     join congress_filings f on f.id = t.filing_id\n                     where t.ticker is not null\n                       and (%(days)s = 0 or coalesce(t.transaction_date, f.filed_date)\n                            >= current_date - %(days)s)\n                   )\n                   , c as (select ticker,\n                     count(*) filter (where transaction_type ilike 'p%%') as buys,\n                     count(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyers,\n                     count(*) filter (where transaction_type ilike 's%%') as sells,\n                     sum(amount_low) filter (where transaction_type ilike 'p%%') as buy_floor,\n                     sum(amount_high) filter (where transaction_type ilike 'p%%') as buy_ceiling,\n                     array_agg(distinct filer_name) filter (where transaction_type ilike 'p%%') as buyer_names\n                   from w\n                   group by ticker\n                   having count(distinct filer_name) filter (where transaction_type ilike 'p%%') >= %(min_buyers)s\n                   ), e as (\n                     select f.ticker,\n                       count(*) filter (where t.transaction_code = 'P') as insider_buys,\n                       count(*) filter (where t.transaction_code = 'S') as insider_sells,\n                       sum(t.value) filter (where t.transaction_code = 'P') as insider_buy_value\n                     from edgar_trades t join edgar_form4 f on f.id = t.form4_id\n                     where (%(days)s = 0 or t.transaction_date >= current_date - %(days)s)\n                     group by f.ticker\n                   )\n                   select c.*, coalesce(e.insider_buys,0) as insider_buys,\n                          coalesce(e.insider_sells,0) as insider_sells, e.insider_buy_value\n                   from c left join e on e.ticker = c.ticker\n                   order by buyers desc, buy_floor desc nulls last\n                   limit %(limit)s""",
                 {"days": days, "min_buyers": min_buyers, "limit": limit},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
+@app.get("/api/insiders")
+def api_insiders():
+    """Form 4 insider transactions for tracked tickers. Codes: P = open-market
+    purchase, S = open-market sale; other codes (awards, options) included but
+    filterable."""
+    ticker = request.args.get("ticker") or None
+    code = request.args.get("code") or None
+    days = int(request.args.get("days", "0") or 0)
+    limit = min(int(request.args.get("limit", "100")), 500)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select t.*, f.ticker, f.insider_name, f.insider_title,\n                          f.is_director, f.is_officer, f.filed_date, f.form_type\n                   from edgar_trades t join edgar_form4 f on f.id = t.form4_id\n                   where (%(ticker)s::text is null or f.ticker = upper(%(ticker)s))\n                     and (%(code)s::text is null or t.transaction_code = %(code)s)\n                     and (%(days)s = 0 or t.transaction_date >= current_date - %(days)s)\n                   order by t.transaction_date desc nulls last, t.id desc\n                   limit %(limit)s""",
+                {"ticker": ticker, "code": code, "days": days, "limit": limit},
             )
             return jsonify([dict(r) for r in cur.fetchall()])
 
@@ -173,5 +196,7 @@ def api_reparse():
 def api_scrape():
     if not _authed():
         return jsonify(error="unauthorized"), 401
-    threading.Thread(target=scrape_all, daemon=True).start()
-    return jsonify(started=True)
+    src = request.args.get("source")
+    sources = [s.strip() for s in src.split(",")] if src else None
+    threading.Thread(target=scrape_all, args=(sources,), daemon=True).start()
+    return jsonify(started=True, sources=sources or "all")
