@@ -3,8 +3,16 @@
 Source: https://disclosures-clerk.house.gov. The Clerk publishes a yearly ZIP
 containing an XML index of all financial disclosure filings; FilingType 'P' is
 a Periodic Transaction Report. PTR PDFs live at a predictable URL by DocID.
-Electronic PTRs contain extractable text tables; scanned/paper filings yield
-no text and are recorded + linked but marked paper_skipped.
+
+Parser (v1.1, validated against real filings): House PTR tables wrap rows
+across physical lines - amount ranges split ('$15,001 -' / '$50,000'), asset
+names continue below with the ticker, and some rows lead with a numeric
+transaction ID instead of an owner code. We therefore group lines into logical
+records first, then extract fields from the joined record. Garbled small-caps
+section headers (rendered with NUL bytes) act as record boundaries; the
+'Filing Status'/'Description' values after the colon survive cleanly and are
+attached to the preceding transaction as comment metadata.
+Scanned/paper filings yield no text and are recorded + linked, paper_skipped.
 """
 import datetime as dt
 import io
@@ -29,17 +37,27 @@ UA = {
 }
 log = logging.getLogger("house")
 
-# One transaction line in an electronic House PTR, e.g.:
-# 'SP Apple Inc (AAPL) [ST] P 01/02/2026 01/05/2026 $1,001 - $15,000'
-LINE_RE = re.compile(
-    r"^(?:(?P<owner>SP|DC|JT)\s+)?"
-    r"(?P<asset>.+?)\s+"
+REC_START = re.compile(r"^(?:\d{6,}\b|(?:SP|DC|JT)\b)")
+CORE_RE = re.compile(
+    r"^(?:(?P<txid>\d{6,})\s+)?(?:(?P<owner>SP|DC|JT)\s+)?(?P<pre>.+?)\s+"
     r"(?P<ttype>P|S\s*\(partial\)|S|E)\s+"
-    r"(?P<tdate>\d{2}/\d{2}/\d{4})\s+"
-    r"(?P<ndate>\d{2}/\d{2}/\d{4})\s+"
-    r"(?P<amount>\$[\d,]+\s*-\s*\$[\d,]+|Over\s+\$[\d,]+)"
+    r"(?P<tdate>\d{2}/\d{2}/\d{4})\s+(?P<ndate>\d{2}/\d{2}/\d{4})\s*(?P<rest>.*)$"
 )
+DOLLAR_RE = re.compile(r"\$[\d,]+")
+OVER_RE = re.compile(r"Over\s+\$[\d,]+", re.I)
 TICKER_RE = re.compile(r"\(([A-Z][A-Z0-9.\-]{0,9})\)")
+ATYPE_RE = re.compile(r"\[([A-Z]{2})\]")
+SKIP_SUBSTR = (
+    "ID Owner Asset",
+    "Type Date Gains",
+    "* For the complete list",
+    "Digitally Signed",
+    "Clerk of the House",
+    "Filing ID #",
+    "Name:",
+    "Status:",
+    "State/District:",
+)
 
 
 def _mmddyyyy(raw):
@@ -73,6 +91,43 @@ def _index(session, year):
     return out
 
 
+def _group_records(text):
+    """Group physical lines into logical transaction records + attach metadata."""
+    records, cur = [], None
+
+    def flush():
+        nonlocal cur
+        if cur:
+            records.append(cur)
+            cur = None
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line in (">", "$200?"):
+            continue
+        if "\x00" in line:
+            # garbled small-caps header = section/metadata boundary
+            flush()
+            if ":" in line and records:
+                label_char = line[0].upper()
+                val = line.split(":", 1)[1].replace("\x00", " ").strip()
+                if val:
+                    if label_char == "F":
+                        records[-1].setdefault("meta", []).append(f"Filing status: {val}")
+                    elif label_char == "D":
+                        records[-1].setdefault("meta", []).append(val)
+            continue
+        if any(s in line for s in SKIP_SUBSTR):
+            continue
+        if REC_START.match(line):
+            flush()
+            cur = {"lines": [line]}
+        elif cur:
+            cur["lines"].append(line)
+    flush()
+    return records
+
+
 def _parse_pdf(content):
     """Returns (trades, status). status: parsed | partial | unparseable | paper_skipped."""
     text_parts = []
@@ -82,16 +137,33 @@ def _parse_pdf(content):
     text = "\n".join(text_parts)
     if not text.strip():
         return [], "paper_skipped"
+
+    records = _group_records(text)
     trades, misses = [], 0
-    for line in text.splitlines():
-        line = line.strip()
-        m = LINE_RE.match(line)
+    for rec in records:
+        joined = " ".join(rec["lines"])
+        m = CORE_RE.match(joined)
         if not m:
-            if "$" in line and re.search(r"\d{2}/\d{2}/\d{4}", line):
-                misses += 1  # looked like a transaction line but didn't parse
+            misses += 1
             continue
-        asset = m.group("asset").strip()
+        rest = m.group("rest") or ""
+        over = OVER_RE.search(rest)
+        dollars = DOLLAR_RE.findall(rest)
+        if over:
+            amount_range = over.group(0)
+        elif len(dollars) >= 2:
+            # wrap-safe: low/high are the first two $ tokens after the dates,
+            # even when wrapped asset text interleaves between them
+            amount_range = f"{dollars[0]} - {dollars[1]}"
+        elif dollars:
+            amount_range = dollars[0]
+        else:
+            misses += 1
+            continue
+        rest_asset = DOLLAR_RE.sub(" ", OVER_RE.sub(" ", rest)).replace(" - ", " ")
+        asset = re.sub(r"\s+", " ", (m.group("pre") + " " + rest_asset)).strip(" -")
         tick = TICKER_RE.search(asset)
+        atype = ATYPE_RE.search(asset)
         trades.append(
             {
                 "transaction_date": _mmddyyyy(m.group("tdate")),
@@ -99,8 +171,10 @@ def _parse_pdf(content):
                 "owner": m.group("owner"),
                 "ticker": tick.group(1) if tick else None,
                 "asset_name": asset,
-                "transaction_type": m.group("ttype"),
-                "amount_range": m.group("amount"),
+                "asset_type": atype.group(1) if atype else None,
+                "transaction_type": re.sub(r"\s+", " ", m.group("ttype")),
+                "amount_range": amount_range,
+                "comment": "; ".join(rec.get("meta", [])) or None,
             }
         )
     if trades and misses == 0:
@@ -163,7 +237,7 @@ def run(cfg):
                         n = insert_trades(cur, f["id"], f["source_url"], parser_version, trades)
                         new_trades += n
                         cur.execute(
-                            """update congress_filings\n                               set parse_status=%s, is_paper=%s where id=%s""",
+                            """update congress_filings\n                               set parse_status=%s, is_paper=%s, parse_error=null where id=%s""",
                             (status, status == "paper_skipped", f["id"]),
                         )
             except Exception as e:

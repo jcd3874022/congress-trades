@@ -118,6 +118,25 @@ def api_config_set():
     return jsonify(ok=True)
 
 
+@app.post("/api/reparse")
+def api_reparse():
+    """Reset failed/partial House filings to pending so the queue re-processes
+    them with the current parser. Deletes their existing trades to avoid dupes."""
+    if not _authed():
+        return jsonify(error="unauthorized"), 401
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """delete from congress_trades where filing_id in\n                     (select id from congress_filings\n                      where source='house' and parse_status in ('partial','unparseable'))"""
+            )
+            deleted = cur.rowcount
+            cur.execute(
+                """update congress_filings set parse_status='pending', parse_error=null\n                   where source='house' and parse_status in ('partial','unparseable')"""
+            )
+            reset = cur.rowcount
+    return jsonify(ok=True, filings_reset=reset, trades_deleted=deleted)
+
+
 @app.post("/api/scrape")
 def api_scrape():
     if not _authed():
