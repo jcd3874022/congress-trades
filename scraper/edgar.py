@@ -84,6 +84,34 @@ def _parse_form4_xml(xml_bytes):
     return insider_name, title, is_director, is_officer, trades
 
 
+def _cik_map(s):
+    """Fetch the SEC ticker->CIK map; on failure fall back to the last good
+    copy cached in edgar_cik_cache so a transient 403 never fails the run."""
+    try:
+        r = s.get(TICKER_MAP_URL, timeout=60)
+        r.raise_for_status()
+        m = {v["ticker"].upper(): str(v["cik_str"]) for v in r.json().values()}
+        import json as _json
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """insert into edgar_cik_cache (id, fetched_at, map)
+                       values (1, now(), %s)
+                       on conflict (id) do update set fetched_at = now(), map = excluded.map""",
+                    (_json.dumps(m),),
+                )
+        return m
+    except Exception as e:
+        log.warning("ticker map fetch failed (%s); using cached copy", e)
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("select map from edgar_cik_cache where id = 1")
+                row = cur.fetchone()
+        if not row:
+            raise
+        return row["map"]
+
+
 def run(cfg):
     run_id = start_run("edgar")
     new_filings, new_trades, errors = 0, 0, []
@@ -95,9 +123,7 @@ def run(cfg):
     s.headers.update({"User-Agent": cfg.get("edgar_user_agent", "congress-trades/1.0")})
     try:
         tickers = _tracked_tickers(cfg)
-        r = s.get(TICKER_MAP_URL, timeout=60)
-        r.raise_for_status()
-        cik_by_ticker = {v["ticker"].upper(): str(v["cik_str"]) for v in r.json().values()}
+        cik_by_ticker = _cik_map(s)
         for ticker in tickers:
             cik = cik_by_ticker.get(ticker)
             if not cik:
