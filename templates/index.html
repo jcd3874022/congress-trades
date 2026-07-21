@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Congress Trades</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--text:#e6edf3;--dim:#8b949e;--green:#3fb950;--red:#f85149;--blue:#58a6ff}
+*{box-sizing:border-box;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,system-ui,sans-serif;padding-bottom:60px}
+header{padding:14px 16px 8px;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line)}
+h1{font-size:17px;font-weight:600}
+.sub{color:var(--dim);font-size:12px;margin-top:2px}
+nav{display:flex;gap:6px;margin-top:10px;overflow-x:auto}
+nav button{background:var(--card);color:var(--dim);border:1px solid var(--line);border-radius:16px;padding:6px 14px;font-size:13px}
+nav button.on{color:var(--text);border-color:var(--blue)}
+#filters{display:flex;gap:6px;padding:10px 16px}
+#filters input,#filters select{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:14px;min-width:0;flex:1}
+main{padding:0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:8px 0}
+.row1{display:flex;justify-content:space-between;gap:8px;font-weight:600;font-size:14px}
+.row2{color:var(--dim);font-size:12px;margin-top:3px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.buy{color:var(--green)}.sell{color:var(--red)}
+a{color:var(--blue);text-decoration:none;font-size:12px}
+.badge{font-size:11px;border:1px solid var(--line);border-radius:6px;padding:1px 6px;color:var(--dim)}
+.empty{color:var(--dim);text-align:center;padding:30px 0;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Congress Trades</h1>
+  <div class="sub">House Clerk + Senate eFD &middot; STOCK Act PTR filings</div>
+  <nav>
+    <button data-tab="trades" class="on">Trades</button>
+    <button data-tab="filings">Filings</button>
+    <button data-tab="runs">Runs</button>
+    <button data-tab="config">Config</button>
+  </nav>
+</header>
+<div id="filters">
+  <input id="f-ticker" placeholder="Ticker" autocapitalize="characters">
+  <input id="f-member" placeholder="Member">
+  <select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>
+</div>
+<main id="main"></main>
+<script>
+let tab='trades';
+const $=s=>document.querySelector(s);
+const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtAmt=t=>t.amount_range||'';
+const txCls=t=>/^p/i.test(t.transaction_type||'')?'buy':(/^s/i.test(t.transaction_type||'')?'sell':'');
+const txLbl=t=>({'P':'BUY','S':'SELL','E':'EXCH'})[(t.transaction_type||'').charAt(0).toUpperCase()]||esc(t.transaction_type||'?');
+async function j(u){const r=await fetch(u);return r.json()}
+function qs(){const p=new URLSearchParams();const t=$('#f-ticker').value.trim(),m=$('#f-member').value.trim(),c=$('#f-chamber').value;if(t)p.set('ticker',t);if(m)p.set('member',m);if(c)p.set('chamber',c);return p.toString()}
+async function render(){
+  const el=$('#main');el.innerHTML='<div class="empty">Loading…</div>';
+  $('#filters').style.display=tab==='trades'?'flex':'none';
+  if(tab==='trades'){
+    const d=await j('/api/trades?'+qs());
+    el.innerHTML=d.length?d.map(t=>`<div class="card">
+      <div class="row1"><span>${esc(t.filer_name)}</span><span class="${txCls(t)}">${txLbl(t)} ${esc(fmtAmt(t))}</span></div>
+      <div class="row2"><span>${esc(t.ticker||'')} ${esc(t.asset_name||'')}</span></div>
+      <div class="row2"><span>tx ${esc(t.transaction_date||'?')} &middot; filed ${esc(t.filed_date||'?')} &middot; ${esc(t.chamber)}</span>
+      <span><a href="${esc(t.source_url)}" target="_blank">source</a> <span class="badge">parser ${esc(t.parser_version)}</span></span></div>
+    </div>`).join(''):'<div class="empty">No trades yet - first scrape may still be running. Check Runs.</div>';
+  }else if(tab==='filings'){
+    const d=await j('/api/filings');
+    el.innerHTML=d.length?d.map(f=>`<div class="card">
+      <div class="row1"><span>${esc(f.filer_name)}</span><span class="badge">${esc(f.parse_status)}</span></div>
+      <div class="row2"><span>${esc(f.source)} &middot; filed ${esc(f.filed_date||'?')} &middot; ${f.trade_count} trades</span>
+      <span><a href="${esc(f.source_url)}" target="_blank">filing</a></span></div>
+    </div>`).join(''):'<div class="empty">No filings yet.</div>';
+  }else if(tab==='runs'){
+    const d=await j('/api/runs');
+    el.innerHTML=d.length?d.map(r=>`<div class="card">
+      <div class="row1"><span>#${r.id} ${esc(r.source)}</span><span class="badge">${esc(r.status)}</span></div>
+      <div class="row2"><span>${esc(r.started_at)}</span><span>+${r.new_filings} filings / +${r.new_trades} trades / ${(r.errors||[]).length} errors</span></div>
+    </div>`).join(''):'<div class="empty">No runs yet.</div>';
+  }else{
+    const d=await j('/api/config');
+    el.innerHTML=d.map(c=>`<div class="card">
+      <div class="row1"><span>${esc(c.key)}</span><input style="background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:4px 8px;width:40%" value="${esc(c.value)}" onchange="setCfg('${esc(c.key)}',this.value)"></div>
+      <div class="row2"><span>${esc(c.description||'')}</span></div>
+    </div>`).join('')+`<div class="card"><button style="width:100%;padding:10px;background:var(--blue);border:0;border-radius:8px;color:#fff;font-size:14px" onclick="runScrape()">Run scrape now</button></div>`;
+  }
+}
+function token(){let t=localStorage.getItem('admin_token');if(!t){t=prompt('Admin token');if(t)localStorage.setItem('admin_token',t)}return t}
+async function setCfg(k,v){await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token()},body:JSON.stringify({key:k,value:v})})}
+async function runScrape(){const r=await fetch('/api/scrape',{method:'POST',headers:{'X-Admin-Token':token()}});alert((await r.json()).started?'Scrape started':'Failed')}
+document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('nav button').forEach(x=>x.classList.remove('on'));b.classList.add('on');tab=b.dataset.tab;render()});
+['f-ticker','f-member','f-chamber'].forEach(id=>{$('#'+id).addEventListener('change',render)});
+render();
+</script>
+</body>
+</html>
