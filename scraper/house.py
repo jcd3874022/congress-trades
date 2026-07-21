@@ -38,6 +38,9 @@ UA = {
 log = logging.getLogger("house")
 
 REC_START = re.compile(r"^(?:\d{6,}\b|(?:SP|DC|JT)\b)")
+# some rows start directly with the asset (no owner/id); type + both dates
+# always sit on the first physical line of a record, so that also opens one
+TX_HINT = re.compile(r"\b(?:P|S\s*\(partial\)|S|E)\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}")
 CORE_RE = re.compile(
     r"^(?:(?P<txid>\d{6,})\s+)?(?:(?P<owner>SP|DC|JT)\s+)?(?P<pre>.+?)\s+"
     r"(?P<ttype>P|S\s*\(partial\)|S|E)\s+"
@@ -119,7 +122,7 @@ def _group_records(text):
             continue
         if any(s in line for s in SKIP_SUBSTR):
             continue
-        if REC_START.match(line):
+        if REC_START.match(line) or TX_HINT.search(line):
             flush()
             cur = {"lines": [line]}
         elif cur:
