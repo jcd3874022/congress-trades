@@ -38,6 +38,7 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
     <button data-tab="largest">Largest</button>
     <button data-tab="clusters">Clusters</button>
     <button data-tab="filings">Filings</button>
+    <button data-tab="paper">Paper</button>
     <button data-tab="runs">Runs</button>
     <button data-tab="config">Config</button>
   </nav>
@@ -60,11 +61,13 @@ function windowSelect(id,def){return `<select id="${id}">`+WINDOWS.map(([v,l])=>
 function filtersFor(t){
   const defWin=parseInt(cfg.dashboard_default_window_days||'90');
   if(t==='trades')return `<input id="f-ticker" placeholder="Ticker" autocapitalize="characters"><input id="f-member" placeholder="Member"><select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
+  if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return windowSelect('f-days',defWin)+`<select id="f-type"><option value="">All types</option><option value="buy">Buys</option><option value="sell">Sells</option></select><select id="f-chamber2"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
   if(t==='clusters')return windowSelect('f-days2',defWin)+`<input id="f-minbuyers" type="number" min="1" value="${parseInt(cfg.cluster_min_buyers||'2')}" style="max-width:90px" title="min buyers">`;
   return '';
 }
 function noteFor(t){
+  if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return 'Ranked by statutory range floor - filings disclose ranges, not exact amounts.';
   if(t==='clusters')return 'Tickers bought by multiple members in the window. $ figures = sum of disclosed range floors-ceilings.';
   return '';
@@ -110,6 +113,12 @@ async function draw(){
       <div class="row2"><span>est. ${usd(c.buy_floor)} - ${usd(c.buy_ceiling)}</span><span>${c.sells} sells in window</span></div>
       <div class="names">${(c.buyer_names||[]).map(esc).join(', ')}</div>
     </div>`).join(''):'<div class="empty">No tickers meet the threshold in this window.</div>';
+  }else if(tab==='paper'){
+    const d=await j('/api/filings?status=paper_skipped&limit=200');
+    el.innerHTML=d.length?d.map(f=>`<div class="card">
+      <div class="row1"><span>${esc(f.filer_name)}</span><span class="badge">${esc(f.source)}</span></div>
+      <div class="row2"><span>filed ${esc(f.filed_date||'?')}</span><span><a href="${esc(f.source_url)}" target="_blank">open scan</a></span></div>
+    </div>`).join(''):'<div class="empty">No paper filings.</div>';
   }else if(tab==='filings'){
     const d=await j('/api/filings');
     el.innerHTML=d.length?d.map(f=>`<div class="card">

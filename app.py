@@ -110,11 +110,12 @@ def api_clusters():
 @app.get("/api/filings")
 def api_filings():
     limit = min(int(request.args.get("limit", "100")), 500)
+    status = request.args.get("status") or None
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """select f.*, count(t.id) as trade_count\n                   from congress_filings f\n                   left join congress_trades t on t.filing_id = f.id\n                   group by f.id\n                   order by f.filed_date desc nulls last, f.id desc limit %s""",
-                (limit,),
+                """select f.*, count(t.id) as trade_count\n                   from congress_filings f\n                   left join congress_trades t on t.filing_id = f.id\n                   where (%(status)s::text is null or f.parse_status = %(status)s)\n                   group by f.id\n                   order by f.filed_date desc nulls last, f.id desc limit %(limit)s""",
+                {"status": status, "limit": limit},
             )
             return jsonify([dict(r) for r in cur.fetchall()])
 
