@@ -192,6 +192,21 @@ def api_reparse():
     return jsonify(ok=True, filings_reset=reset, trades_deleted=deleted)
 
 
+@app.get("/api/debug/fetch")
+def api_debug_fetch():
+    """Admin-only network probe: status code of a GET from this service's IP."""
+    if not _authed():
+        return jsonify(error="unauthorized"), 401
+    import requests as rq
+    url = request.args.get("url")
+    ua = request.args.get("ua") or load_config().get("edgar_user_agent", "probe")
+    try:
+        resp = rq.get(url, headers={"User-Agent": ua}, timeout=30)
+        return jsonify(url=url, status=resp.status_code, length=len(resp.content))
+    except Exception as e:
+        return jsonify(url=url, error=str(e)), 200
+
+
 @app.post("/api/scrape")
 def api_scrape():
     if not _authed():
