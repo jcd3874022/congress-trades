@@ -144,7 +144,7 @@ async function draw(){
     const d=await j('/api/runs');
     el.innerHTML=d.length?d.map(r=>`<div class="card">
       <div class="row1"><span>#${r.id} ${esc(r.source)}</span><span class="badge">${esc(r.status)}</span></div>
-      <div class="row2"><span>${esc(r.started_at)}</span><span>+${r.new_filings} filings / +${r.new_trades} trades / ${(r.errors||[]).length} errors</span></div>
+      <div class="row2"><span>${esc(r.started_at)}</span><span>+${r.new_filings_live ?? r.new_filings} filings / +${r.new_trades} trades / ${(r.errors||[]).length} errors</span></div>
     </div>`).join(''):'<div class="empty">No runs yet.</div>';
   }else{
     const d=await j('/api/config');

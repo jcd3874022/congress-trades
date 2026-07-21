@@ -147,7 +147,14 @@ def api_filings():
 def api_runs():
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("select * from congress_scrape_runs order by id desc limit 25")
+            cur.execute(
+                """select r.*,
+                     case when r.status = 'running' then
+                       (select count(*) from congress_filings cf where cf.scrape_run_id = r.id)
+                       + (select count(*) from edgar_form4 ef where ef.scrape_run_id = r.id)
+                     else r.new_filings end as new_filings_live
+                   from congress_scrape_runs r order by r.id desc limit 25"""
+            )
             return jsonify([dict(r) for r in cur.fetchall()])
 
 
