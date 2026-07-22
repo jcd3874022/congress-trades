@@ -51,7 +51,8 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
 <div id="note" class="note"></div>
 <main id="main"></main>
 <script>
-let tab='home', cfg={};
+let tab='home', cfg={}, chartMetric='count';
+function setMetric(m){chartMetric=m;draw()}
 const $=s=>document.querySelector(s);
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const txCls=t=>/^p/i.test(t||'')?'buy':(/^s/i.test(t||'')?'sell':'');
@@ -100,17 +101,25 @@ async function draw(){
     const [tl,tk]=await Promise.all([j('/api/timeline?days='+days),j('/api/tickers?days='+days+'&limit=25')]);
     let chart='<div class="empty">No activity in window.</div>';
     if(tl.length){
+      const byDollar=chartMetric==='dollar';
+      const bv=w=>byDollar?Number(w.buy_floor||0):w.buys, sv=w=>byDollar?Number(w.sell_floor||0):w.sells;
       const W=340,H=150,mid=H/2,bw=Math.max(3,Math.floor(W/tl.length)-2);
-      const mx=Math.max(1,...tl.map(w=>Math.max(w.buys,w.sells)));
+      const mx=Math.max(1,...tl.map(w=>Math.max(bv(w),sv(w))));
       const bars=tl.map((w,i)=>{
-        const x=i*(bw+2)+4,bh=Math.round(w.buys/mx*(mid-14)),sh=Math.round(w.sells/mx*(mid-14));
+        const x=i*(bw+2)+4,bh=Math.round(bv(w)/mx*(mid-14)),sh=Math.round(sv(w)/mx*(mid-14));
         return `<rect x="${x}" y="${mid-bh}" width="${bw}" height="${Math.max(bh,1)}" fill="#3fb950"/>`+
                `<rect x="${x}" y="${mid+1}" width="${bw}" height="${Math.max(sh,1)}" fill="#f85149"/>`;
       }).join('');
       const first=(tl[0].wk||'').slice(0,10),last=(tl[tl.length-1].wk||'').slice(0,10);
-      chart=`<div class="card"><div class="row2"><span class="buy">buys ↑</span><span class="sell">sells ↓</span></div>
+      const totB=tl.reduce((a,w)=>a+bv(w),0),totS=tl.reduce((a,w)=>a+sv(w),0);
+      const fmt=v=>byDollar?usd(v):v;
+      chart=`<div class="card">
+        <div class="row2"><span class="buy">buys ↑ ${fmt(totB)}</span>
+        <span><button onclick="setMetric('count')" style="background:${byDollar?'var(--card)':'var(--blue)'};color:${byDollar?'var(--dim)':'#fff'};border:1px solid var(--line);border-radius:6px;padding:3px 10px;font-size:12px"># trades</button>
+        <button onclick="setMetric('dollar')" style="background:${byDollar?'var(--blue)':'var(--card)'};color:${byDollar?'#fff':'var(--dim)'};border:1px solid var(--line);border-radius:6px;padding:3px 10px;font-size:12px">$ floor</button></span>
+        <span class="sell">sells ↓ ${fmt(totS)}</span></div>
         <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="#30363d"/>${bars}</svg>
-        <div class="row2"><span>${first}</span><span>weekly</span><span>${last}</span></div></div>`;
+        <div class="row2"><span>${first}</span><span>weekly · ${byDollar?'sum of disclosed range floors':'transaction count'}</span><span>${last}</span></div></div>`;
     }
     const list=tk.map(t=>`<div class="card" onclick="goTicker('${esc(t.ticker)}')">
       <div class="row1"><span class="tk">${esc(t.ticker)}</span><span><span class="buy">${t.buys} buy</span> / <span class="sell">${t.sells} sell</span></span></div>

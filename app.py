@@ -186,7 +186,9 @@ def api_timeline():
             cur.execute(
                 """select date_trunc('week', coalesce(t.transaction_date, f.filed_date))::date as wk,
                           count(*) filter (where t.transaction_type ilike 'p%%') as buys,
-                          count(*) filter (where t.transaction_type ilike 's%%') as sells
+                          count(*) filter (where t.transaction_type ilike 's%%') as sells,
+                          coalesce(sum(t.amount_low) filter (where t.transaction_type ilike 'p%%'), 0) as buy_floor,
+                          coalesce(sum(t.amount_low) filter (where t.transaction_type ilike 's%%'), 0) as sell_floor
                    from congress_trades t join congress_filings f on f.id = t.filing_id
                    where coalesce(t.transaction_date, f.filed_date) >= current_date - %(days)s
                    group by 1 order by 1""",
