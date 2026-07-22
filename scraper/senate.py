@@ -40,7 +40,7 @@ def _session():
     return s
 
 
-def _index_rows(s, lookback_days):
+def _index_rows(s, lookback_days, filer_types):
     csrf = s.cookies.get("csrftoken", "")
     since = (dt.date.today() - dt.timedelta(days=lookback_days)).strftime("%m/%d/%Y")
     start, length, rows = 0, 100, []
@@ -49,7 +49,7 @@ def _index_rows(s, lookback_days):
             "start": str(start),
             "length": str(length),
             "report_types": "[11]",
-            "filer_types": "[]",
+            "filer_types": filer_types,
             "submitted_start_date": f"{since} 00:00:00",
             "submitted_end_date": "",
             "candidate_state": "",
@@ -118,7 +118,7 @@ def run(cfg):
     delay = float(cfg.get("request_delay_seconds", "0.5"))
     try:
         s = _session()
-        rows = _index_rows(s, int(cfg.get("senate_lookback_days", "90")))
+        rows = _index_rows(s, int(cfg.get("senate_lookback_days", "90")), cfg.get("senate_filer_types", "[]"))
         log.info("senate index rows: %d", len(rows))
         for row in rows:
             try:
