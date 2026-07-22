@@ -39,6 +39,7 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
     <button data-tab="clusters">Clusters</button>
     <button data-tab="insiders">Insiders</button>
     <button data-tab="filings">Filings</button>
+    <button data-tab="staff">Staff</button>
     <button data-tab="paper">Paper</button>
     <button data-tab="runs">Runs</button>
     <button data-tab="config">Config</button>
@@ -63,6 +64,7 @@ function filtersFor(t){
   const defWin=parseInt(cfg.dashboard_default_window_days||'90');
   if(t==='trades')return `<input id="f-ticker" placeholder="Ticker" autocapitalize="characters"><input id="f-member" placeholder="Member"><select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
   if(t==='insiders')return 'SEC Form 4 filings for tickers congress traded recently. P = open-market buy, S = sale.';
+  if(t==='staff')return 'PTRs filed by non-members: Senate staff, candidates, former senators. Office shown as filed.';
   if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return windowSelect('f-days',defWin)+`<select id="f-type"><option value="">All types</option><option value="buy">Buys</option><option value="sell">Sells</option></select><select id="f-chamber2"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
   if(t==='insiders')return `<input id="f-iticker" placeholder="Ticker" autocapitalize="characters"><select id="f-icode"><option value="">All codes</option><option value="P">Buys (P)</option><option value="S">Sells (S)</option></select>`+windowSelect('f-idays',defWin);
@@ -70,6 +72,7 @@ function filtersFor(t){
   return '';
 }
 function noteFor(t){
+  if(t==='staff')return 'PTRs filed by non-members: Senate staff, candidates, former senators. Office shown as filed.';
   if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return 'Ranked by statutory range floor - filings disclose ranges, not exact amounts.';
   if(t==='clusters')return 'Tickers bought by multiple members in the window. $ figures = sum of disclosed range floors-ceilings.';
@@ -127,6 +130,14 @@ async function draw(){
       <div class="row2"><span>${esc(t.ticker)} &middot; ${esc(t.insider_title||(t.is_director?'Director':''))}</span><span>${t.value?'$'+Number(t.value).toLocaleString(undefined,{maximumFractionDigits:0}):''}</span></div>
       <div class="row2"><span>tx ${esc(t.transaction_date||'?')} &middot; filed ${esc(t.filed_date||'?')}</span><span><a href="${esc(t.source_url)}" target="_blank">form 4</a></span></div>
     </div>`).join(''):'<div class="empty">No insider transactions yet - EDGAR pull may still be running.</div>';
+  }else if(tab==='staff'){
+    const d=await j('/api/trades?role=staff&limit=100');
+    el.innerHTML=d.length?d.map(t=>`<div class="card">
+      <div class="row1"><span>${esc(t.filer_name)}</span><span class="${txCls(t.transaction_type)}">${txLbl(t.transaction_type)} ${esc(t.amount_range||'')}</span></div>
+      <div class="row2"><span>${esc(t.chamber_office||'')}</span></div>
+      <div class="row2"><span>${esc(t.ticker||'')} ${esc(t.asset_name||'')}</span></div>
+      <div class="row2"><span>tx ${esc(t.transaction_date||'?')}</span><span><a href="${esc(t.source_url)}" target="_blank">source</a></span></div>
+    </div>`).join(''):'<div class="empty">No staff trades yet - the staff backfill may still be running (see Runs).</div>';
   }else if(tab==='paper'){
     const d=await j('/api/filings?status=paper_skipped&limit=200');
     el.innerHTML=d.length?d.map(f=>`<div class="card">

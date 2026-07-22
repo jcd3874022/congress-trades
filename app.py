@@ -75,8 +75,20 @@ def api_trades():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """select t.*, f.filer_name, f.source as chamber, f.filed_date,\n                          f.parse_status, f.filer_state\n                   from congress_trades t\n                   join congress_filings f on f.id = t.filing_id\n                   where (%(ticker)s::text is null or upper(t.ticker) = upper(%(ticker)s))\n                     and (%(member)s::text is null or f.filer_name ilike '%%' || %(member)s || '%%')\n                     and (%(chamber)s::text is null or f.source = %(chamber)s)\n                   order by coalesce(t.transaction_date, f.filed_date) desc nulls last, t.id desc\n                   limit %(limit)s offset %(offset)s""",
-                {"ticker": ticker, "member": member, "chamber": chamber, "limit": limit, "offset": offset},
+                """with x as (
+                     select t.*, f.filer_name, f.source as chamber, f.filed_date,
+                            f.parse_status, f.filer_state, f.chamber_office,
+                            case when f.source = 'house' then 'member'
+                                 when f.chamber_office ilike '%%(senator)%%'
+                                   or trim(coalesce(f.chamber_office,'')) ilike 'senator'
+                                 then 'member' else 'staff' end as filer_role
+                     from congress_trades t
+                     join congress_filings f on f.id = t.filing_id
+                   )
+                   select * from x
+                   where (%(role)s::text is null or filer_role = %(role)s)
+                     and (%(ticker)s::text is null or upper(ticker) = upper(%(ticker)s))\n                     and (%(member)s::text is null or filer_name ilike '%%' || %(member)s || '%%')\n                     and (%(chamber)s::text is null or chamber = %(chamber)s)\n                   order by coalesce(transaction_date, filed_date) desc nulls last, id desc\n                   limit %(limit)s offset %(offset)s""",
+                {"ticker": ticker, "member": member, "chamber": chamber, "limit": limit, "offset": offset, "role": (request.args.get("role") or None)},
             )
             return jsonify([dict(r) for r in cur.fetchall()])
 
