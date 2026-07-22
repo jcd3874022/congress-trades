@@ -6,7 +6,7 @@ import time
 from flask import Flask, jsonify, render_template, request
 
 from db import get_conn
-from scraper import edgar, house, senate
+from scraper import edgar, house, oge, senate
 from scraper.common import load_config
 
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +16,7 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 _scrape_lock = threading.Lock()
 
 
-SOURCES = {"senate": senate, "house": house, "edgar": edgar}
+SOURCES = {"senate": senate, "house": house, "edgar": edgar, "oge": oge}
 
 
 def scrape_all(sources=None):
@@ -138,6 +138,28 @@ def api_insiders():
             cur.execute(
                 """select t.*, f.ticker, f.insider_name, f.insider_title,\n                          f.is_director, f.is_officer, f.filed_date, f.form_type\n                   from edgar_trades t join edgar_form4 f on f.id = t.form4_id\n                   where (%(ticker)s::text is null or f.ticker = upper(%(ticker)s))\n                     and (%(code)s::text is null or t.transaction_code = %(code)s)\n                     and (%(days)s = 0 or t.transaction_date >= current_date - %(days)s)\n                   order by t.transaction_date desc nulls last, t.id desc\n                   limit %(limit)s""",
                 {"ticker": ticker, "code": code, "days": days, "limit": limit},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
+@app.get("/api/executive")
+def api_executive():
+    """OGE 278-T transactions by executive-branch officials."""
+    ticker = request.args.get("ticker") or None
+    official = request.args.get("official") or None
+    days = int(request.args.get("days", "0") or 0)
+    limit = min(int(request.args.get("limit", "100")), 500)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select t.*, f.official_name, f.agency, f.position, f.posted_date
+                   from oge_trades t join oge_filings f on f.id = t.filing_id
+                   where (%(ticker)s::text is null or upper(t.ticker) = upper(%(ticker)s))
+                     and (%(official)s::text is null or f.official_name ilike '%%' || %(official)s || '%%')
+                     and (%(days)s = 0 or t.transaction_date >= current_date - %(days)s)
+                   order by t.transaction_date desc nulls last, t.id desc
+                   limit %(limit)s""",
+                {"ticker": ticker, "official": official, "days": days, "limit": limit},
             )
             return jsonify([dict(r) for r in cur.fetchall()])
 
