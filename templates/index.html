@@ -34,7 +34,8 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
   <h1>Congress Trades</h1>
   <div class="sub">House Clerk + Senate eFD &middot; STOCK Act PTR filings</div>
   <nav>
-    <button data-tab="trades" class="on">Trades</button>
+    <button data-tab="home" class="on">Home</button>
+    <button data-tab="trades">Trades</button>
     <button data-tab="largest">Largest</button>
     <button data-tab="clusters">Clusters</button>
     <button data-tab="insiders">Insiders</button>
@@ -50,7 +51,7 @@ a{color:var(--blue);text-decoration:none;font-size:12px}
 <div id="note" class="note"></div>
 <main id="main"></main>
 <script>
-let tab='trades', cfg={};
+let tab='home', cfg={};
 const $=s=>document.querySelector(s);
 const esc=s=>(s??'').toString().replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const txCls=t=>/^p/i.test(t||'')?'buy':(/^s/i.test(t||'')?'sell':'');
@@ -63,9 +64,11 @@ function windowSelect(id,def){return `<select id="${id}">`+WINDOWS.map(([v,l])=>
 
 function filtersFor(t){
   const defWin=parseInt(cfg.dashboard_default_window_days||'90');
+  if(t==='home')return windowSelect('f-hdays',parseInt(cfg.dashboard_default_window_days||'90'));
   if(t==='trades')return `<input id="f-ticker" placeholder="Ticker" autocapitalize="characters"><input id="f-member" placeholder="Member"><select id="f-chamber"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
   if(t==='insiders')return 'SEC Form 4 filings for tickers congress traded recently. P = open-market buy, S = sale.';
   if(t==='staff')return 'PTRs filed by non-members: Senate staff, candidates, former senators. Office shown as filed.';
+  if(t==='home')return 'Congressional activity: weekly buys (green, up) vs sells (red, down), and per-ticker totals.';
   if(t==='exec')return 'OGE 278-T periodic transaction reports - cabinet and Senate-confirmed executive-branch officials.';
   if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return windowSelect('f-days',defWin)+`<select id="f-type"><option value="">All types</option><option value="buy">Buys</option><option value="sell">Sells</option></select><select id="f-chamber2"><option value="">Both</option><option value="house">House</option><option value="senate">Senate</option></select>`;
@@ -75,6 +78,7 @@ function filtersFor(t){
 }
 function noteFor(t){
   if(t==='staff')return 'PTRs filed by non-members: Senate staff, candidates, former senators. Office shown as filed.';
+  if(t==='home')return 'Congressional activity: weekly buys (green, up) vs sells (red, down), and per-ticker totals.';
   if(t==='exec')return 'OGE 278-T periodic transaction reports - cabinet and Senate-confirmed executive-branch officials.';
   if(t==='paper')return 'Handwritten/scanned filings - no machine-readable text. Open the scan to read them.';
   if(t==='largest')return 'Ranked by statutory range floor - filings disclose ranges, not exact amounts.';
@@ -91,7 +95,29 @@ async function render(){
 }
 async function draw(){
   const el=$('#main');
-  if(tab==='trades'){
+  if(tab==='home'){
+    const days=$('#f-hdays')?.value||cfg.dashboard_default_window_days||'90';
+    const [tl,tk]=await Promise.all([j('/api/timeline?days='+days),j('/api/tickers?days='+days+'&limit=25')]);
+    let chart='<div class="empty">No activity in window.</div>';
+    if(tl.length){
+      const W=340,H=150,mid=H/2,bw=Math.max(3,Math.floor(W/tl.length)-2);
+      const mx=Math.max(1,...tl.map(w=>Math.max(w.buys,w.sells)));
+      const bars=tl.map((w,i)=>{
+        const x=i*(bw+2)+4,bh=Math.round(w.buys/mx*(mid-14)),sh=Math.round(w.sells/mx*(mid-14));
+        return `<rect x="${x}" y="${mid-bh}" width="${bw}" height="${Math.max(bh,1)}" fill="#3fb950"/>`+
+               `<rect x="${x}" y="${mid+1}" width="${bw}" height="${Math.max(sh,1)}" fill="#f85149"/>`;
+      }).join('');
+      const first=(tl[0].wk||'').slice(0,10),last=(tl[tl.length-1].wk||'').slice(0,10);
+      chart=`<div class="card"><div class="row2"><span class="buy">buys ↑</span><span class="sell">sells ↓</span></div>
+        <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto"><line x1="0" y1="${mid}" x2="${W}" y2="${mid}" stroke="#30363d"/>${bars}</svg>
+        <div class="row2"><span>${first}</span><span>weekly</span><span>${last}</span></div></div>`;
+    }
+    const list=tk.map(t=>`<div class="card" onclick="goTicker('${esc(t.ticker)}')">
+      <div class="row1"><span class="tk">${esc(t.ticker)}</span><span><span class="buy">${t.buys} buy</span> / <span class="sell">${t.sells} sell</span></span></div>
+      <div class="row2"><span>${t.buyers} buyers &middot; floor ${usd(t.buy_floor)}</span><span>last ${esc((t.last_activity||'').slice(0,10))}</span></div>
+    </div>`).join('');
+    el.innerHTML=chart+list;
+  }else if(tab==='trades'){
     const p=new URLSearchParams();
     if($('#f-ticker')?.value.trim())p.set('ticker',$('#f-ticker').value.trim());
     if($('#f-member')?.value.trim())p.set('member',$('#f-member').value.trim());
@@ -176,6 +202,7 @@ async function draw(){
     </div>`).join('')+`<div class="card"><button style="width:100%;padding:10px;background:var(--blue);border:0;border-radius:8px;color:#fff;font-size:14px" onclick="runScrape()">Run scrape now</button></div>`;
   }
 }
+function goTicker(tk){tab='trades';document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('on',x.dataset.tab==='trades'));render().then(()=>{const f=$('#f-ticker');if(f){f.value=tk;draw()}})}
 function token(){let t=localStorage.getItem('admin_token');if(!t){t=prompt('Admin token');if(t)localStorage.setItem('admin_token',t)}return t}
 async function setCfg(k,v){await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Token':token()},body:JSON.stringify({key:k,value:v})});cfg[k]=v}
 async function runScrape(){const r=await fetch('/api/scrape',{method:'POST',headers:{'X-Admin-Token':token()}});alert((await r.json()).started?'Scrape started':'Failed')}

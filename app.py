@@ -34,6 +34,18 @@ def scrape_all(sources=None):
         _scrape_lock.release()
 
 
+def _cleanup_stale_runs():
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """update congress_scrape_runs set status='failed', finished_at=now(),
+                       errors='["orphaned by service restart"]'::jsonb where status='running'"""
+                )
+    except Exception:
+        log.exception("stale run cleanup failed")
+
+
 def _scheduler():
     time.sleep(60)
     while True:
@@ -48,6 +60,7 @@ def _scheduler():
         time.sleep(max(hours, 0.25) * 3600)
 
 
+_cleanup_stale_runs()
 threading.Thread(target=_scheduler, daemon=True).start()
 
 
@@ -160,6 +173,49 @@ def api_executive():
                    order by t.transaction_date desc nulls last, t.id desc
                    limit %(limit)s""",
                 {"ticker": ticker, "official": official, "days": days, "limit": limit},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
+@app.get("/api/timeline")
+def api_timeline():
+    """Weekly congressional buy/sell counts for the overview chart."""
+    days = int(request.args.get("days", "180") or 180)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select date_trunc('week', coalesce(t.transaction_date, f.filed_date))::date as wk,
+                          count(*) filter (where t.transaction_type ilike 'p%%') as buys,
+                          count(*) filter (where t.transaction_type ilike 's%%') as sells
+                   from congress_trades t join congress_filings f on f.id = t.filing_id
+                   where coalesce(t.transaction_date, f.filed_date) >= current_date - %(days)s
+                   group by 1 order by 1""",
+                {"days": days},
+            )
+            return jsonify([dict(r) for r in cur.fetchall()])
+
+
+@app.get("/api/tickers")
+def api_tickers():
+    """Per-ticker congressional activity summary."""
+    days = int(request.args.get("days", "90") or 90)
+    limit = min(int(request.args.get("limit", "30")), 100)
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """select t.ticker,
+                          count(*) filter (where t.transaction_type ilike 'p%%') as buys,
+                          count(*) filter (where t.transaction_type ilike 's%%') as sells,
+                          count(distinct f.filer_name) filter (where t.transaction_type ilike 'p%%') as buyers,
+                          sum(t.amount_low) filter (where t.transaction_type ilike 'p%%') as buy_floor,
+                          max(coalesce(t.transaction_date, f.filed_date)) as last_activity
+                   from congress_trades t join congress_filings f on f.id = t.filing_id
+                   where t.ticker is not null
+                     and coalesce(t.transaction_date, f.filed_date) >= current_date - %(days)s
+                   group by t.ticker
+                   order by buys desc, buy_floor desc nulls last
+                   limit %(limit)s""",
+                {"days": days, "limit": limit},
             )
             return jsonify([dict(r) for r in cur.fetchall()])
 
